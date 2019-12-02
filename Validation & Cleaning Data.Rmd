@@ -1,0 +1,316 @@
+---
+title: "Validation & Cleaning of NYPD Arrests Data Set"
+author: "Darshan Patel"
+date: "11/22/2019"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load in libraries.
+```{r}
+# Load libraries for reading and manipulating data
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(proj4)
+```
+
+Link for data set: https://data.cityofnewyork.us/Public-Safety/NYPD-Arrests-Data-Historic-/8h9b-rp9u. 
+```{r}
+# Read in data
+arrests = read_delim('NYPD_Arrests_Data__Historic_.csv', delim = ',')
+```
+
+Investigate the size of the data.
+```{r}
+# Get size of the data set
+dim(arrests)
+```
+
+There are 4798339 arrests made in NYC in the time frame of this data set. There are 18 variables for each record. This is consistent with the information shared on the website.
+
+To validate the data, look at each column and check if the data is valid and consistent. **NOTE**: Use the footnote of the data set to determine if discrepancies should be ignored.
+```{r}
+# Get list of columns 
+colnames(arrests)
+```
+
+There are 18 columns to validate.
+
+The `ARREST_KEY` column is used to give a randomly generated ID for each arrest. Check if all arrests are unique and there is no repeated arrest record.
+```{r}
+# Get vector of unique keys and check its length with actual column
+length(unique(arrests$ARREST_KEY)) == length(arrests$ARREST_KEY)
+```
+
+All IDs are unique.
+
+The `ARREST_DATE` column is used to record the exact date of arrest for the reported event. Determine the time frame of the column.
+```{r}
+# Convert the column to Date type for easy use
+arrests$ARREST_DATE = as.Date(arrests$ARREST_DATE, "%m/%d/%Y")
+```
+
+The earliest and latest record shown, respectively, is
+```{r}
+min(arrests$ARREST_DATE)
+max(arrests$ARREST_DATE)
+```
+
+For the purpose of this analysis, the data will be subsetted such that records from 2015 onwards will be shown.
+```{r}
+# Remove records of pre-2015 data
+arrests = arrests %>% subset(year(ARREST_DATE) >= 2015)
+```
+
+Check that the earliest record was in 2015.
+```{r}
+# Get earliest date
+min(arrests$ARREST_DATE)
+```
+
+Column is cleaned. 
+
+The `PD_CD` column is a 3 digit internal classification code. Check for records with no classification code.
+```{r}
+# Get number of records with no classification code
+sum(is.na(arrests$PD_CD))
+```
+
+There are 69 records with no classification code. According to the footnote documentation, null values may appear frequently due to changes on official department forms or if information was not available or unknown at the time. 
+
+Check if the records with no internal classification code are random or have a pattern of occurrence. 
+```{r}
+# Get index of which arrests have no code
+which(is.na(arrests$PD_CD))
+```
+
+There is no pattern in which records have no internal classification code. It can be ruled that the information was not available at the time. Investigate the columns with no classification code.
+
+```{r}
+# Look at few of the records with no code
+head(arrests[(is.na(arrests$PD_CD)),], 10)
+```
+
+Note that with the missing classification code, `PD_DESC`, `KY_CD`, `OFNS_DESC`, and some of the `LAW_CODE` columns were also missing data. All of these fields should be filled with an `UNKNOWN` value. 
+
+Impute missing value in `PD_CD` column. Check if done properly.
+```{r}
+# Impute missing value
+arrests$PD_CD[is.na(arrests$PD_CD)] = "UNKNOWN"
+# Check if any missing values appear
+any(is.na(arrests$PD_CD))
+```
+
+No missing values. 
+
+The `PD_DESC` column gives the description of the internal classification code. The records with missing value can be imputed with `UNKNOWN` since its description of the arrest cannot be inferred. 
+```{r}
+# Impute missing value
+arrests$PD_DESC[is.na(arrests$PD_DESC)] = "UNKNOWN"
+# Check if any missing values left
+any(is.na(arrests$PD_DESC))
+```
+
+No missing values.
+
+The `KY_CD` column gives a 3 digit internal classification code which is more general than the PD code. Impute the missing values and check if done properly.
+
+```{r}
+# Impute missing value
+arrests$KY_CD[is.na(arrests$KY_CD)] = "UNKNOWN"
+# Check if any missing values left
+any(is.na(arrests$KY_CD))
+```
+
+The `OFNS_DESC` column describes the classification associated with the KY code. Impute the missing values and check if done properly.
+
+```{r}
+# Impute missing values
+arrests$OFNS_DESC[is.na(arrests$OFNS_DESC)] = "UNKNOWN"
+# Check if any missing values left
+any(is.na(arrests$OFNS_DESC))
+```
+
+The `LAW_CODE` column gives the law code charges corresponding to the NYS Penal Law, VTL and other various local laws. It was previously noted that, unlike the previous code columns, not all of the law codes are missing when the classification code itself is missing. Any determination of the actual code cannot be done since it can come from various sources. Impute the missing values and check if done properly.
+
+```{r}
+# Impute missing values
+arrests$LAW_CODE[is.na(arrests$LAW_CODE)] = "UNKNOWN"
+# Check if any missing values left
+any(is.na(arrests$LAW_CODE))
+```
+
+The `LAW_CAT_CD` column tells the level of offense: felony, misdemeanor, violation. 
+```{r}
+# Look at the summary of the column
+summary(as.factor(arrests$LAW_CAT_CD))
+```
+
+There appears to be a new value, "I", which is not discussed in the footnote of the data set. Investigate those crimes.
+```{r}
+# Get few observations that have an "I" for level of offense
+# and some information on it
+head(arrests[arrests$LAW_CAT_CD == 'I', c('PD_DESC', 'LAW_CODE', 'LAW_CAT_CD')], 10)
+```
+
+Given by the information in the above table, and research from the internet, the "I" refers to traffic infractions, defined by the VTL. These are minor traffic violations such as exceeding the speed limit, running stop signs, etc. In terms of severity, it is the least severe of all four offenses. 
+
+Look at the description of arrests for which level of offenses is not given.
+```{r}
+# See what unknown law code records say about its description
+table(arrests[is.na(arrests$LAW_CAT_CD), 'PD_DESC'])
+```
+
+Information on the arrest itself is either unclassified, from other states or on parole. For this analysis, an `UNKNOWN` will be placed for the null values. 
+```{r}
+# Impute missing values
+arrests$LAW_CAT_CD[is.na(arrests$LAW_CAT_CD)] = "UNKNOWN"
+# Check if any missing values left
+any(is.na(arrests$LAW_CAT_CD))
+```
+
+The `ARREST_BORO` column tells which of the 5 boroughs the arrest was made in. There should be no issues here. Check if only boroughs are named.
+```{r}
+# Get table of values for boroughs 
+table(as.factor(arrests$ARREST_BORO))
+```
+
+Only the 5 NYC boroughs are mentioned here. Check for missing values.
+```{r}
+any(is.na(arrests$ARREST_BORO))
+```
+
+No missing values or strange values. The column is cleaned.
+
+The `ARREST_PRECINCT` column tells which precinct the arrest occured in. Check if the values are numeric and there are no null values.
+```{r}
+# Check for valid values
+table(arrests$ARREST_PRECINCT)
+```
+
+```{r}
+any(is.na(arrests$ARREST_PRECINCT))
+```
+
+Alll data is numeric and there are no missing data. 
+
+According to the NYPD website, there are 77 unique precincts in NYC. Check if this is true for the data set. 
+```{r}
+# Get number of unique precincts
+length(unique(arrests$ARREST_PRECINCT))
+```
+
+Furthermore, verify that the 77 unique precincts are exactly the same as the ones defined by the NYPD. For this, use the shapefile published by NYC Planning agency for "Police Precincts" under the School, Police, Health & Fire menu. This shapefile will provide information on all the precincts such as its name and geographical location. 
+(Source: https://www1.nyc.gov/site/planning/data-maps/open-data/districts-download-metadata.page)
+```{r}
+# Read in shapefile of the NYC police precincts
+sf = read_sf('.', 'nypp')
+# Check that all the precincts in the data set are valid
+all(sf$Precinct == sort(unique(arrests$ARREST_PRECINCT)))
+```
+
+All precincts are valid NYPD precincts. The data is correct.
+
+*NOTE: By value, the precincts in the data set matches the one used by the NYPD in the shapefile. However, the New York City Council uses a different mapping of NYC precincts, one that has only 51 precincts. For extreme accuracy in analysis, it would be best to map the precincts to the one used by the NYCC since this report will be read by the Council staffer. For this analysis, this cleaning process will be left out as it is not too important.*
+
+The `JURISDICTION_CODE` column tells what jurisdiction was responsible for the arrest. Check for missing values. 
+```{r}
+# Determine if there are any missing values
+sum(is.na(arrests$JURISDICTION_CODE))
+```
+
+No missing values. Investigate the count of different codes.
+```{r}
+# Get table of jurisdiction code
+table(arrests$JURISDICTION_CODE)
+```
+
+A look at the different jurisdiction codes indicate that there are many codes greater than 3, which represent non-NYPD jurisdictions. This is reflected in the footnote documentation. 
+
+The `AGE_GROUP` column reveals the age category of the perpetrator. Check for missing values and odd values. 
+```{r}
+# Get table of age group
+table(arrests$AGE_GROUP)
+```
+
+No missing data.
+
+The `PERP_SEX` column reveals the sex of the perpetrator. Check for missing values and odd values. 
+```{r}
+# Get table of sexes
+table(arrests$PERP_SEX)
+```
+
+No missing data.
+
+The `PERP_RACE` column reveals the race of the perpetrator. Check for missing values and odd values.
+```{r}
+# Get table of races
+table(arrests$PERP_RACE)
+```
+
+No missing data.
+
+The `X_COORD_CD` and `Y_COORD_CD` columns give the midblock X and Y coordinate from the NYS Plane Coordinate System, respectively. The `Latitude` and `Longitude` columns give the latitude and longitude coordinates respectively. These values give the location of the arrest made. 
+
+First, check that the midblock coordinates given using the NYS Plane Coordinate System correctly project into the latitude and longitude coordinates given. 
+
+In order to do this, the projection must be defined. This can be found at: https://spatialreference.org/ref/epsg/2263/, which gives the Proj4js format for the EPSG projection 2263 - NAD83 / New York Long Island (ftus). Note that it was last revised in Nov 2001. A better verification method could be utilized. 
+
+```{r}
+# Set up projection attributes
+proj4string = "+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs"
+# Create data frame to store coordinates
+xy = data.frame(x=arrests$X_COORD_CD, y = arrests$Y_COORD_CD)
+# Project the coordinates into geographical lat/long coordinates
+pj = project(xy, proj4string, inverse = TRUE)
+```
+
+Get the differences in the latitude and longitude values recorded in the data set and the projection. 
+```{r}
+# Find differences in coordinate locations
+lat_difference = pj$y - arrests$Latitude
+long_difference = pj$x - arrests$Longitude
+```
+
+Look at the biggest difference in coordinate calculation and reported latitude/longitude values.
+```{r}
+# Print maximum differences
+max(lat_difference)
+max(long_difference)
+```
+
+These values are very tiny; it is safe to safe that the X and Y coordinates from the NYS Plane Coordinate System match the latitude and longitude coordinates given.
+
+Check that the coordinates (from the NYS Plane Coordinate System) belong in NYC. For this, plot the shape file to show boundaries of NYC and its precincts. On the map of NYC, plot the coordinates of the arrests made.
+```{r}
+# Plot shapefile and midblock X & Y coordinates of arrests
+ggplot(sf) + 
+  geom_sf(color = "black", fill = "white") +
+  geom_point(data = arrests, 
+             aes(x = X_COORD_CD, y = Y_COORD_CD),
+             size = 0.005, alpha = 0.01, color = "dodgerblue1") + 
+  labs(x = "Longitude", y = "Latitude", 
+       title = "Map of NYC Arrests") + 
+  coord_sf(crs = st_crs(2263)) + 
+  theme_bw()
+```
+
+All records of arrests are clearly within the boundary of NYC. 
+
+For more accurate verification, check that each arrest was made in the correct precinct using the geometry of the precinct from the shapefile and the coordinates given in the data set. For this analysis, it will be left out. 
+
+This data set is now validated and cleaned. Export the cleaned data set. 
+```{r}
+# Create csv file for cleaned data set
+arrests %>% write_csv("arrests_cleaned.csv")
+```
+
+
