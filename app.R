@@ -20,6 +20,7 @@ library(sf)
 library(zoo)
 library(lubridate)
 library(RColorBrewer)
+library(wesanderson)
 
 # Read in data and fix missing value column
 arrests = read_delim("arrests_cleaned.csv", delim = ',')
@@ -165,18 +166,23 @@ server <- function(input, output) {
         mapping = mapping %>% mutate(quintile = cut(mapping$freq, 
                                                     breaks = quintiles, 
                                                     include.lowest = TRUE, 
-                                                    labels = brewer.pal(n = 5, "YlGnBu")))
+                                                    labels = brewer.pal(n = 5, "Blues"))) %>% 
+            add_row(ARREST_PRECINCT = setdiff(sf$Precinct, mapping$ARREST_PRECINCT), freq = 0, quintile = '#FFFFFF')
+        
         
         # Match the precincts in the shape file with the ones in the data frame created above
         mapping = mapping %>% slice(match(sf$Precinct, mapping$ARREST_PRECINCT))
         
         # Plot the map with its appropriate arrest quintile and add a legend
-        plot(sf_2, col = as.character(mapping$quintile))
-        legend("topleft", legend = c(key, "no data"), 
-               fill = c(brewer.pal(n = 5, "YlGnBu"), "white"), 
-               cex = 0.9, y.intersp = 0.7, 
-               title = "Number of Arrests")
-    }, height = 450, width = 450)
+        ggplot(sf) + geom_sf(color = "black", aes(fill = mapping$quintile), show.legend = TRUE) + 
+            scale_fill_brewer(palette = "Blues", name = "Number of Arrests",
+                              labels = c("No data", key)) + 
+            labs(x = "Longitude", y = "Latitude") + 
+            coord_sf(crs = st_crs(2263)) + 
+            theme_minimal() + 
+            theme(legend.position = "bottom") %>% print
+        
+    }, height = 400, width = 400)
     
         
     # Creates the third map using coordinates of a single crime in a particular year
