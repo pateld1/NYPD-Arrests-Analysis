@@ -14,10 +14,12 @@ runtime: shiny
 # Load packages 
 library(shiny)
 library(png)
+library(rgdal)
 library(tidyverse)
 library(sf)
 library(zoo)
 library(lubridate)
+library(RColorBrewer)
 
 # Read in data and fix missing value column
 arrests = read_delim("arrests_cleaned.csv", delim = ',')
@@ -25,6 +27,7 @@ arrests$PD_CD[is.na(arrests$PD_CD)] = "UNKNOWN"
 
 # Read in shapefile of the NYC police precincts
 sf = read_sf('.', 'nypp')
+sf_2 = readOGR('.', 'nypp')
 
 # Define UI for application that plots visualizations
 ui <- fluidPage(
@@ -40,48 +43,88 @@ ui <- fluidPage(
         p("Note: This is only a proof of concept and there are many improvements that can be made.")),
     
     # Create the map of arrests by year
-    sidebarLayout(position = "right",
-                  sidebarPanel("Pick a year:",
-                               sliderInput(inputId = "x", 
-                                           label = '', 
-                                           min = 2015, 
-                                           max = 2018, 
-                                           value = 2015,
-                                           sep= "",
-                                           width = '200px')),
-                   mainPanel(h3("Map of NYPD Arrests"),
-              p("This map shows the location of all crimes that have occured in a single year. Use the slider on the right to pick the year of interest."))), 
-    mainPanel(plotOutput("cityMap")),
+    mainPanel(h3("Yearly Arrests Made by the NYPD"),
+              p("This map shows the location of all crimes that have occured in a single year. Use the slider on the right to pick the year of interest.")),
+    sidebarLayout(
+        position = "right",
+        sidebarPanel(
+            "Pick a year:",
+            sliderInput(
+                inputId = "x", 
+                    label = '', 
+                    min = 2015, 
+                    max = 2018, 
+                    value = 2015,
+                    sep= "",
+                    width = '200px')), 
+        mainPanel(plotOutput("cityMap"))),
+    #mainPanel(plotOutput("cityMap")),
+    
+    # Create the map of arrests by year and type per precinct
+    mainPanel(h3("Occurrences of Arrest by Year and Precinct"), 
+              p("This map will show which precincts have higher number of a certain crime occuring in a single year. Use the drop-box to select a crime of interest. Use the slider on the right to pick the year of interest.")),
+    sidebarLayout(
+        position = "right",
+        sidebarPanel(
+            "Pick a crime:",
+            selectInput(
+                inputId = "cPrecinct",
+                label = '',
+                selected = "AGGRAVATED HARASSMENT 2",
+                choices = as.list(sort(unique(arrests$PD_DESC))),
+                width = '300px'), 
+            "Pick a year:", 
+            sliderInput(
+                inputId = "y",
+                label = '',
+                min = 2015, 
+                max = 2018,
+                value = 2015,  
+                sep = "",
+                width = '200px')), 
+        mainPanel(plotOutput("crimePrecinctMap"))), 
+    #mainPanel(plotOutput("crimePrecinctMap")),
+    mainPanel(p("The best use of this map is for more frequent arrests. This map will return errors if there is no data on certain arrests in the year since quintiles cannot be calculated on no data.")),
     
     # Create the map of arrests by year and type
-    sidebarLayout(position = "right",
-                  sidebarPanel("Pick a crime:",
-                               selectInput(inputId = "cMap",
-                                           label = '',
-                                           choices = as.list(sort(unique(arrests$PD_DESC))),
-                                           width = '300px'), 
-                               "Pick a year:", 
-                               sliderInput(inputId = "y",
-                                           label = '',
-                                           min = 2015, 
-                                           max = 2018,
-                                           value = 2015,  
-                                           sep = "",
-                                           width = '200px')), 
-                  mainPanel(h3("Map of Crimes"), 
-              p("This map shows the location of a particular crime that have occured in a single year. Use the drop-box to select a crime of interest. Use the slider on the right to pick the year of interest."))), 
-    mainPanel(plotOutput("crimeMap")),
+    mainPanel(h3("Location of Arrest by Year"), 
+              p("This map shows the location of a particular crime that have occured in a single year. Use the drop-box to select a crime of interest. Use the slider on the right to pick the year of interest.")), 
+    sidebarLayout(
+        position = "right",
+        sidebarPanel(
+            "Pick a crime:",
+            selectInput(
+                inputId = "cMap",
+                label = '',
+                choices = as.list(sort(unique(arrests$PD_DESC))),
+                width = '300px'), 
+            "Pick a year:", 
+            sliderInput(
+                inputId = "z",
+                label = '',
+                min = 2015, 
+                max = 2018,
+                value = 2015,  
+                sep = "",
+                width = '200px')), 
+        mainPanel(plotOutput("crimeMap"))), 
+    #mainPanel(plotOutput("crimeMap")),
     
     # Create a bar graph of arrests by month from 2015 to 2018
-    sidebarLayout(position = "right",
-                  sidebarPanel("Pick a crime:",
-                               selectInput(inputId = "cBar",
-                                           label = '',
-                                           choices = as.list(sort(unique(arrests$PD_DESC))), 
-                                           width = '300px')), 
-                  mainPanel(h3("Trend of Crime"), 
-              p("This bar graph shows the frequency of a crime that has occured by month from 2015 to 2018. Use the drop-box to select a crime of interest."))), 
-    mainPanel(plotOutput("crimeBarPlot"))
+    mainPanel(h3("Crime vs. Time"), 
+              p("This bar graph shows the frequency of a crime that has occured by month from 2015 to 2018. Use the drop-box to select a crime of interest.")),
+    sidebarLayout(
+        position = "right",
+        sidebarPanel(
+            "Pick a crime:",
+            selectInput(
+                inputId = "cBar",
+                label = '',
+                choices = as.list(sort(unique(arrests$PD_DESC))), 
+                width = '300px')), 
+        mainPanel(plotOutput("crimeBarPlot")))
+    #mainPanel(plotOutput("crimeBarPlot")),
+    
 )
     
 
@@ -101,7 +144,42 @@ server <- function(input, output) {
             theme_minimal() %>% print
     }, height = 400, width = 400)
     
-    # Creates the second map using coordinates of a single crime in a particular year
+    # Create the second map that shows percentile of crimes occuring by precinct
+    output$crimePrecinctMap <- renderPlot({
+        
+        # Filter out relevant information queried by user and sum by precinct
+        mapping = arrests %>% filter(PD_DESC == input$cPrecinct & 
+                                         year(ARREST_DATE) == input$z) %>%
+            group_by(ARREST_PRECINCT) %>% summarize(freq = n())
+ 
+        # Get the quintiles for the frequency values
+        quintiles = round(quantile(mapping$freq, probs = seq(0, 1, 0.2), na.rm = TRUE), 3)
+        
+        # Create a vector to be used in a map legend for the quintiles calculated
+        key = c()
+        for(i in 1:5){
+            key = c(key, paste(quintiles[i], quintiles[i+1], sep = ' to '))
+        }
+        
+        # Determine which precincts and its frequency value belong in which quintile region
+        mapping = mapping %>% mutate(quintile = cut(mapping$freq, 
+                                                    breaks = quintiles, 
+                                                    include.lowest = TRUE, 
+                                                    labels = brewer.pal(n = 5, "YlGnBu")))
+        
+        # Match the precincts in the shape file with the ones in the data frame created above
+        mapping = mapping %>% slice(match(sf$Precinct, mapping$ARREST_PRECINCT))
+        
+        # Plot the map with its appropriate arrest quintile and add a legend
+        plot(sf_2, col = as.character(mapping$quintile))
+        legend("topleft", legend = c(key, "no data"), 
+               fill = c(brewer.pal(n = 5, "YlGnBu"), "white"), 
+               cex = 0.9, y.intersp = 0.7, 
+               title = "Number of Arrests")
+    }, height = 450, width = 450)
+    
+        
+    # Creates the third map using coordinates of a single crime in a particular year
     # chosen by the user
     output$crimeMap <- renderPlot({
         ggplot(sf) + 
@@ -132,3 +210,4 @@ server <- function(input, output) {
 
 # Run the application 
 shinyApp(ui = ui, server = server)
+
